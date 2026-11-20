@@ -94,7 +94,7 @@
     #overlay .qty-row .undo-last{flex:0 0 54px;width:54px;font-size:18px;line-height:1;display:flex;flex-direction:column;
       align-items:center;justify-content:center;gap:2px;color:var(--danger);border-color:#fecaca;}
     #overlay .qty-row .undo-last small{font-size:10px;font-weight:700;}
-    #overlay .mode-seg button{height:46px;padding:0 9px;}
+    #overlay .mode-seg button{height:46px;width:56px;padding:0;font-size:14px;}
     .mode-seg{flex:0 0 auto;display:flex;border:2px solid var(--border);border-radius:12px;overflow:hidden;}
     .mode-seg button{flex:none;padding:0 10px;height:42px;font-size:13px;font-weight:700;border-radius:0;
       background:var(--surface);color:var(--muted);}
@@ -282,12 +282,12 @@
       <div class="qty-row">
         <button class="step" onclick="adjustQty(-1)">−</button>
         <input id="qtyInput" type="number" inputmode="numeric" value="1" min="0">
-        <button class="step undo-last" id="undoLastBtn" onclick="undoLast()" title="撤銷上一筆">↩<small>上一筆</small></button>
         <button class="step" onclick="adjustQty(1)">＋</button>
         <div class="mode-seg">
           <button class="on" id="modeAdd" onclick="setMode('add')">累加</button>
           <button id="modeSet" onclick="setMode('set')">覆蓋</button>
         </div>
+        <button class="step undo-last" id="undoLastBtn" onclick="undoLast()" title="撤銷上一筆">↩︎<small>上一筆</small></button>
       </div>
       <div class="actions">
         <button class="cancel" onclick="closeModal()">取消</button>
