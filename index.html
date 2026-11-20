@@ -27,8 +27,20 @@
     .top .who{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%;}
     button.icon{flex:0 0 auto;width:42px;height:42px;padding:0;font-size:19px;border-radius:12px;
       background:var(--surface);color:var(--text);border:1.5px solid var(--border);}
-    #reader{width:100%;border-radius:14px;overflow:hidden;background:#000;min-height:220px;}
-    #reader video{border-radius:14px;display:block;}
+    /* 相機畫面只露出中間一段（約原本 40% 高），取景框在正中間，辨識範圍不變 */
+    #readerWrap{position:relative;width:100%;height:200px;border-radius:14px;overflow:hidden;background:#000;}
+    #reader{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);width:100%;min-height:200px;}
+    #reader video{display:block;}
+    .batch-bar{display:flex;align-items:center;gap:8px;background:var(--surface);border:1.5px solid var(--border);
+      border-radius:12px;padding:8px 10px;margin-bottom:10px;font-size:14px;}
+    .batch-bar.on{border-color:var(--primary);background:#eff4ff;}
+    .batch-bar .bt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .batch-bar b{color:var(--primary);}
+    .batch-bar button{flex:0 0 auto;font-size:13px;padding:7px 12px;border-radius:10px;}
+    .wh-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px;}
+    .wh-btn{padding:16px 6px;border-radius:12px;border:2px solid var(--border);background:var(--surface);color:var(--text);
+      font-size:18px;font-weight:800;}
+    .wh-btn.on{border-color:var(--primary);background:#eff4ff;color:var(--primary);}
     .controls{display:flex;gap:10px;margin:14px 0 4px;}
     button{font-size:16px;padding:14px 16px;border-radius:12px;border:none;cursor:pointer;
       font-weight:700;background:var(--primary);color:#fff;flex:1;transition:.15s;}
@@ -59,6 +71,31 @@
     .sheet .actions{position:sticky;bottom:calc(-20px - env(safe-area-inset-bottom));background:var(--surface);
       margin-bottom:calc(-20px - env(safe-area-inset-bottom));padding-bottom:calc(14px + env(safe-area-inset-bottom));padding-top:12px;z-index:2;}
     .sheet h2{margin:0 0 3px;font-size:20px;font-weight:800;line-height:1.25;}
+    /* 商品視窗：一頁式（不捲動就能填完） */
+    #overlay .sheet{padding-top:14px;}
+    #overlay .sheet h2{font-size:17px;}
+    .p-head{display:flex;gap:10px;align-items:flex-start;}
+    .p-head .p-txt{flex:1;min-width:0;}
+    .p-img{flex:0 0 76px;width:76px;height:76px;border-radius:10px;border:1px solid var(--border);background:#fff;
+      object-fit:contain;display:none;}
+    .p-img.show{display:block;}
+    #overlay .lbl{margin:10px 0 6px;display:flex;justify-content:space-between;align-items:center;}
+    #overlay .info-row{margin-top:4px;font-size:12px;}
+    .loc-three{display:flex;gap:6px;}
+    .loc-three .field{flex:1;min-width:0;padding:9px 8px;font-size:16px;}
+    #overlay .loc-chips{margin-bottom:6px;gap:6px;}
+    #overlay .loc-chip{padding:6px 4px;font-size:14px;}
+    #overlay .status-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
+    #overlay .st-btn{padding:8px 2px;font-size:15px;gap:1px;border-radius:10px;}
+    #overlay .st-btn small{font-size:11px;}
+    #overlay .qty-row{gap:6px;}
+    #overlay .qty-row .step{width:44px;height:46px;font-size:22px;border-radius:12px;}
+    #overlay .qty-row input{font-size:24px;padding:6px;border-radius:12px;min-width:0;}
+    .mode-seg{flex:0 0 auto;display:flex;border:2px solid var(--border);border-radius:12px;overflow:hidden;}
+    .mode-seg button{flex:none;padding:0 10px;height:42px;font-size:13px;font-weight:700;border-radius:0;
+      background:var(--surface);color:var(--muted);}
+    .mode-seg button.on{background:var(--primary);color:#fff;}
+    #overlay .actions{margin-top:12px;}
     .sheet .model{color:var(--muted);font-size:14px;}
     .sheet .barcode{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace;margin-top:2px;}
     .lbl{font-size:13px;color:var(--muted);margin:16px 0 8px;font-weight:600;}
@@ -179,7 +216,11 @@
 
   <div id="cfgWarn" class="warn" style="display:none">尚未設定 API 網址：請編輯本檔開頭的 API_URL。</div>
 
-  <div id="reader"></div>
+  <div class="batch-bar" id="batchBar">
+    <span class="bt" id="batchText">尚未選倉庫</span>
+    <button class="ghost" onclick="openWarehouse()">選倉庫</button>
+  </div>
+  <div id="readerWrap"><div id="reader"></div></div>
   <div class="controls">
     <button id="startBtn" onclick="startScan()">開始掃描</button>
     <button id="stopBtn" class="ghost" onclick="stopScan()" disabled>停止</button>
@@ -213,43 +254,56 @@
 
   <div class="overlay" id="overlay">
     <div class="sheet">
-      <h2 id="mName">—</h2>
-      <div class="model" id="mModel"></div>
-      <div class="barcode" id="mBarcode"></div>
-      <div class="info-row" id="mInfo"></div>
+      <div class="p-head">
+        <div class="p-txt">
+          <h2 id="mName">—</h2>
+          <div class="model" id="mModel"></div>
+          <div class="barcode" id="mBarcode"></div>
+          <div class="info-row" id="mInfo"></div>
+        </div>
+        <img class="p-img" id="mImg" alt="">
+      </div>
       <div id="locSec">
-        <div class="lbl">位置</div>
+        <div class="lbl"><span>位置 <small id="locNote" style="font-weight:400"></small></span>
+          <button type="button" class="loc-btn" id="locOnlyBtn" onclick="saveLocationOnly()">只更新位置</button></div>
         <div class="loc-chips" id="locChips">
           <button type="button" class="loc-chip" onclick="pickFloor('1樓')">1樓</button>
           <button type="button" class="loc-chip" onclick="pickFloor('2樓')">2樓</button>
           <button type="button" class="loc-chip" onclick="pickFloor('4樓')">4樓</button>
         </div>
-        <input id="locInput" class="field" placeholder="儲位（點上方樓層或直接輸入）" autocomplete="off" enterkeyhint="next">
-        <div class="loc-two">
-          <input id="palletInput" class="field" placeholder="板位號碼" autocomplete="off" enterkeyhint="next">
+        <div class="loc-three">
+          <input id="locInput" class="field" placeholder="儲位" autocomplete="off" enterkeyhint="next">
+          <input id="palletInput" class="field" placeholder="板位" autocomplete="off" enterkeyhint="next">
           <input id="boxInput" class="field" placeholder="箱號" autocomplete="off" enterkeyhint="done">
         </div>
-        <div class="loc-foot">
-          <span id="locNote">有修改的位置會隨「存入表單」一起寫回</span>
-          <button type="button" class="loc-btn" id="locOnlyBtn" onclick="saveLocationOnly()">只更新位置</button>
-        </div>
       </div>
-      <div class="lbl">狀態</div>
+      <div class="lbl"><span>狀態</span></div>
       <div class="status-grid" id="statusGrid"></div>
-      <div class="lbl">數量</div>
+      <div class="lbl"><span>數量</span></div>
       <div class="qty-row">
         <button class="step" onclick="adjustQty(-1)">−</button>
         <input id="qtyInput" type="number" inputmode="numeric" value="1" min="0">
         <button class="step" onclick="adjustQty(1)">＋</button>
-      </div>
-      <div class="lbl">寫入方式</div>
-      <div class="mode-row">
-        <button class="mode-btn on" id="modeAdd" onclick="setMode('add')">累加<small>目前 + 本次</small></button>
-        <button class="mode-btn" id="modeSet" onclick="setMode('set')">覆蓋<small>直接設為此數</small></button>
+        <div class="mode-seg">
+          <button class="on" id="modeAdd" onclick="setMode('add')">累加</button>
+          <button id="modeSet" onclick="setMode('set')">覆蓋</button>
+        </div>
       </div>
       <div class="actions">
         <button class="cancel" onclick="closeModal()">取消</button>
         <button class="save" id="saveBtn" onclick="save()">存入表單</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 選倉庫（每批掃描前） -->
+  <div class="overlay" id="whOverlay">
+    <div class="sheet">
+      <h2>選擇倉庫</h2>
+      <div class="sub" id="whSub">選好後開始新的一批，紀錄會寫到你自己的新分頁</div>
+      <div class="wh-grid" id="whGrid"></div>
+      <div class="actions">
+        <button class="cancel" style="flex:1" onclick="closeWarehouse()">取消</button>
       </div>
     </div>
   </div>
@@ -475,12 +529,13 @@
       if(scanning) return;
       initAudio();
       warmCache(false);
+      if(!batch.name){ openWarehouse(startScan); return; }   // 每批先選倉庫
       if(typeof Html5Qrcode==='undefined'){
         setHint('載入相機元件中…',true);
         try{ await loadScript(QR_LIBS); }catch(e){ setHint('相機元件載入失敗，請檢查網路後重試'); return; }
       }
       if(!qr) qr=new Html5Qrcode('reader',{verbose:false});
-      const cfg={fps:15,qrbox:{width:280,height:170},aspectRatio:1.3,disableFlip:true,
+      const cfg={fps:15,qrbox:(w,h)=>({width:Math.max(120,Math.min(280,Math.floor(w*0.85))),height:Math.max(80,Math.min(150,Math.floor(h*0.3)))}),aspectRatio:1.3,disableFlip:true,
         formatsToSupport:[
           Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
           Html5QrcodeSupportedFormats.UPC_A,  Html5QrcodeSupportedFormats.UPC_E,
@@ -872,7 +927,7 @@
         const el=document.getElementById('cur-'+s.name);
         if(el) el.textContent='目前 '+((res.quantities||{})[s.name]??0);
       });
-      fillLocation(res);
+      fillLocation(res); showImg(res);
       qtyInput.value=1; selectStatus('新品');
       overlay.classList.add('show');
       setHint('填寫數量與狀態');
@@ -915,7 +970,7 @@
       document.getElementById('palletInput').disabled=old;
       document.getElementById('boxInput').disabled=old;
       document.getElementById('locSec').style.display = backendVersion===1 ? 'none' : '';
-      document.getElementById('locNote').textContent = old ? '板位、箱號需要更新後端 Code.gs（v3）' : '有修改的位置會隨「存入表單」一起寫回';
+      document.getElementById('locNote').textContent = old ? '（板位、箱號需更新後端）' : '';
       paintLocation();
     }
     // 只回傳「有變動」的欄位；沒有變動回傳 null
@@ -955,7 +1010,7 @@
       const p=product, btn=document.getElementById('locOnlyBtn');
       btn.disabled=true; btn.textContent='更新中…';
       try{
-        const r=await apiPost(Object.assign({ action:'setLocation', row:p.row, barcode:p.barcode||'' }, ch));
+        const r=await apiPost(Object.assign({ action:'setLocation', row:p.row, barcode:p.barcode||'', batch:batch.name||'', warehouse:batch.warehouse||'' }, ch));
         if(r && r.ok){
           const it=r.item||{};
           const loc={ location:it.location||'', pallet:it.pallet||'', box:it.box||'' };
@@ -977,11 +1032,13 @@
 
     function makeJob(p, st, qty, md){
       return { id:uid(), item:{barcode:p.barcode||'', row:p.row, name:p.name||'', model:p.model||''}, name:p.name||p.barcode||'', model:p.model||'',
-        status:st, qty, mode:md, prev:(p.quantities && p.quantities[st]) ?? 0, operator:settings.operator, t:Date.now() };
+        status:st, qty, mode:md, prev:(p.quantities && p.quantities[st]) ?? 0, operator:settings.operator, t:Date.now(),
+        batch:batch.name||'', warehouse:batch.warehouse||'' };
     }
     function save(){
       if(!product) return;
       initAudio();
+      if(!batch.name){ openWarehouse(save); return; }
       const qty=parseInt(qtyInput.value,10);
       if(isNaN(qty)||qty<0){toast('請輸入有效數量','err');return;}
       const job=makeJob(product, status, qty, mode);
@@ -1009,7 +1066,7 @@
       }
       if(opt.modal){ saveBtn.disabled=true; saveBtn.textContent='儲存中…'; }
       const unbusy=()=>{ if(opt.modal){ saveBtn.disabled=false; saveBtn.textContent='存入表單'; } };
-      apiSave(job.item, job.status, job.qty, job.mode, job.loc).then(r=>{
+      apiSave(job.item, job.status, job.qty, job.mode, jobExtra(job)).then(r=>{
         unbusy();
         if(r && r.ok){
           feedback('ok');
@@ -1057,13 +1114,13 @@
     }
     function addHist(job,r){
       hist.unshift({ id:job.id, name:job.name, model:job.model, barcode:job.item.barcode, row:r.row ?? job.item.row,
-        status:r.status, added:r.added, newVal:r.newValue, prev:prevFrom(job,r), mode:r.mode, operator:job.operator||'', t:new Date() });
+        batch:job.batch||'', warehouse:job.warehouse||'', status:r.status, added:r.added, newVal:r.newValue, prev:prevFrom(job,r), mode:r.mode, operator:job.operator||'', t:new Date() });
       saveHistLS(); renderHist();
     }
     function enqueue(job){
       queue.push(job); saveQueueLS();
       hist.unshift({ id:job.id, name:job.name, model:job.model, barcode:job.item.barcode, row:job.item.row,
-        status:job.status, added:job.qty, newVal:null, prev:null, mode:job.mode, operator:job.operator||'', pending:true, t:new Date(job.t) });
+        batch:job.batch||'', warehouse:job.warehouse||'', status:job.status, added:job.qty, newVal:null, prev:null, mode:job.mode, operator:job.operator||'', pending:true, t:new Date(job.t) });
       saveHistLS(); renderHist(); renderQueue();
     }
     function renderQueue(){
@@ -1081,7 +1138,7 @@
           const job=queue[0];
           const h=hist.find(x=>x.id===job.id);
           let r;
-          try{ r=await apiSave(job.item, job.status, job.qty, job.mode, job.loc); }
+          try{ r=await apiSave(job.item, job.status, job.qty, job.mode, jobExtra(job)); }
           catch(e){
             if(isNetErr(e)) break;                         // 還是沒網路：保留，下次再試
             queue.shift();                                 // 逾時：不確定是否已寫入，不再重送
@@ -1128,7 +1185,7 @@
         +'\n\n（若之後有人再修改過此品項，會被這個數字覆蓋）')) return;
       h.busy=true; renderHist();
       try{
-        const r=await apiSave({barcode:h.barcode, row:h.row, name:h.name, model:h.model}, h.status, h.prev, 'set', { undo:true });
+        const r=await apiSave({barcode:h.barcode, row:h.row, name:h.name, model:h.model}, h.status, h.prev, 'set', { undo:true, batch:h.batch||'', warehouse:h.warehouse||'' });
         if(r && r.ok){
           h.undone=true; feedback('ok'); patchListQty(r.row ?? h.row, h.status, r.newValue);
           toast('↩ 已撤銷，'+h.status+' 還原為 '+r.newValue,'ok');
@@ -1232,6 +1289,8 @@
         const r=await apiGet('auth', {code});
         if(r && r.ok){
           settings.code=code; settings.operator=r.name||''; saveSettingsLS(); renderWho(); closeSettings();
+          if(batch.operator && batch.operator!==settings.operator){ batch={}; try{ localStorage.removeItem(BATCH_KEY); }catch(e){} renderBatch(); }
+          loadWarehouses();
           feedback('ok'); toast('✓ 歡迎，'+settings.operator,'ok');
           if(queue.length) flushQueue();
           warmCache(true);
@@ -1260,10 +1319,77 @@
       }catch(e){ toast('失敗：'+e.message,'err'); }
     }
 
+    // ---- 每批倉庫（每人每批一個分頁，由後端第一次寫入時建立）----
+    const BATCH_KEY='stocktake_batch_v1', WH_KEY='stocktake_wh_v1';
+    const DEFAULT_WH=['12-9','11-3','1F-1','1F-2','2F-1','2F-2','4F'];
+    let batch={}, warehouses=DEFAULT_WH.slice(), afterWarehouse=null;
+    try{ batch=JSON.parse(localStorage.getItem(BATCH_KEY)||'{}')||{}; }catch(e){ batch={}; }
+    try{ const w=JSON.parse(localStorage.getItem(WH_KEY)||'null'); if(Array.isArray(w)&&w.length) warehouses=w; }catch(e){}
+    if(batch.operator && batch.operator!==settings.operator) batch={};   // 換人登入 → 重新選
+    function jobExtra(job){ return Object.assign({}, job.loc||{}, job.batch?{ batch:job.batch, warehouse:job.warehouse }:{}); }
+    function pad2(n){ return String(n).padStart(2,'0'); }
+    function renderBatch(){
+      const bar=document.getElementById('batchBar'), on=!!batch.name;
+      bar.classList.toggle('on', on);
+      document.getElementById('batchText').innerHTML = on
+        ? '本批：<b>'+esc(batch.warehouse)+'</b>　'+fmtTime(batch.t) : '尚未選倉庫（開始掃描前要先選）';
+      bar.querySelector('button').textContent = on ? '換一批' : '選倉庫';
+    }
+    function loadWarehouses(){
+      if(!settings.code) return;
+      apiGet('warehouses').then(r=>{
+        if(r && r.ok && Array.isArray(r.warehouses) && r.warehouses.length){
+          warehouses=r.warehouses; try{ localStorage.setItem(WH_KEY, JSON.stringify(warehouses)); }catch(e){}
+          if(document.getElementById('whOverlay').classList.contains('show')) renderWarehouses();
+        }
+      }).catch(()=>{});
+    }
+    function renderWarehouses(){
+      document.getElementById('whGrid').innerHTML = warehouses.map((w,i)=>
+        '<button class="wh-btn'+(w===batch.warehouse?' on':'')+'" onclick="pickWarehouse('+i+')">'+esc(w)+'</button>').join('');
+    }
+    function openWarehouse(then){
+      if(!settings.code){ openSettings(); toast('請先登入','err'); return; }
+      afterWarehouse = typeof then==='function' ? then : null;
+      if(qr&&scanning){ try{ qr.pause(true); }catch(e){} }
+      document.getElementById('whSub').textContent = batch.name
+        ? '目前這批：'+batch.warehouse+'（'+fmtTime(batch.t)+'）。選倉庫會開始新的一批、寫到新分頁'
+        : '選好後開始新的一批，紀錄會寫到你自己的新分頁';
+      renderWarehouses(); loadWarehouses();
+      document.getElementById('whOverlay').classList.add('show');
+    }
+    function closeWarehouse(){ document.getElementById('whOverlay').classList.remove('show'); afterWarehouse=null; resume(); }
+    function pickWarehouse(i){
+      const w=warehouses[i]; if(!w) return;
+      if(batch.name && !confirm('開始新的一批「'+w+'」？\n之後的紀錄會寫到新的分頁。')) return;
+      const d=new Date();
+      const stamp=pad2(d.getMonth()+1)+pad2(d.getDate())+'_'+pad2(d.getHours())+pad2(d.getMinutes());
+      batch={ warehouse:w, operator:settings.operator, t:d.getTime(),
+        name:('盤點_'+(settings.operator||'未登入')+'_'+w+'_'+stamp).replace(/[\[\]*?:\/\\]/g,'-').slice(0,100) };
+      try{ localStorage.setItem(BATCH_KEY, JSON.stringify(batch)); }catch(e){}
+      renderBatch();
+      document.getElementById('whOverlay').classList.remove('show');
+      toast('✓ 本批倉庫：'+w,'ok');
+      const fn=afterWarehouse; afterWarehouse=null;
+      if(fn) fn(); else resume();
+    }
+
+    // ---- 產品圖（img/map.json：b:條碼 / m:型號 → 圖檔）----
+    let imgMap=null;
+    fetch('img/map.json').then(r=>r.ok?r.json():null).then(m=>{ imgMap=m||{}; if(product) showImg(product); }).catch(()=>{ imgMap={}; });
+    function showImg(p){
+      const el=document.getElementById('mImg');
+      const f = imgMap && p && (imgMap['b:'+normBarcode_(p.barcode)] || imgMap['m:'+String(p.model||'').trim().toUpperCase()]);
+      el.onerror=()=>el.classList.remove('show');
+      if(f){ el.src='img/'+f; el.classList.add('show'); } else { el.removeAttribute('src'); el.classList.remove('show'); }
+    }
+
     // ---- 初始化 ----
     document.getElementById('contStatus').innerHTML=STATUS_META.map(sm=>'<option>'+sm.name+'</option>').join('');
     renderWho();
+    renderBatch();
     checkBackend();
+    setTimeout(loadWarehouses, 1200);
     if(!settings.code) setTimeout(openSettings, 300);
     setTimeout(()=>warmCache(false), 800);                       // 開 App 就預先載入庫存快取
     setInterval(()=>warmCache(false), 60*1000);                  // 每分鐘檢查，超過 5 分鐘就更新

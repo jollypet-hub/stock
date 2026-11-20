@@ -2,6 +2,7 @@
  * 倉庫盤點掃描 — 後端 API (Google Apps Script)  v3
  * 含「每人密碼登入 + 修改紀錄」，並新增：新增商品 / 綁定條碼 / 儲位 / 盤點進度與差異 / 開始新一輪
  * v3：位置欄位（儲位 / 板位號碼 / 箱號）可隨「存入表單」一起寫回，或單獨更新
+ * v4：每批先選倉庫（「倉庫」分頁維護清單）；每人每批的盤點紀錄寫進獨立分頁「盤點_姓名_倉庫_MMdd_HHmm」
  *
  * 綁定在你的試算表上：擴充功能 → Apps Script，把整個 Code.gs 內容換成本檔。
  *
@@ -34,8 +35,12 @@ const COUNTER_HEADER  = '盤點人員';      // 自動新增
 
 const USERS_SHEET = '使用者';  // 使用者清單分頁（姓名/密碼/啟用）
 const LOG_SHEET   = '紀錄';    // 修改紀錄分頁（自動建立）
+const WAREHOUSE_SHEET = '倉庫';  // 倉庫清單分頁（自動建立；A 欄一列一個倉庫名稱）
+const DEFAULT_WAREHOUSES = ['12-9', '11-3', '1F-1', '1F-2', '2F-1', '2F-2', '4F'];
+const BATCH_PREFIX = '盤點_';     // 每人每批分頁的名稱開頭
+const BATCH_HEADERS = ['時間', '倉庫', '盤點人員', '品名', '型號', '國際條碼', '狀態', '本次數量', '寫入方式', '前值', '後值', '儲位', '板位號碼', '箱號', '列', '備註'];
 const SEARCH_LIMIT = 30;
-const API_VERSION = 3;
+const API_VERSION = 4;
 // ==============================================
 
 
@@ -52,6 +57,7 @@ function doGet(e) {
     if (p.action === 'lookup') return json_(lookupProduct(p.barcode));
     if (p.action === 'search') return json_(searchProducts(p.q));
     if (p.action === 'list')   return json_(listAll());
+    if (p.action === 'warehouses') return json_({ ok: true, warehouses: listWarehouses_() });
     return json_({ ok: false, error: '未知的動作' });
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -324,11 +330,16 @@ function saveCount(params, user) {
 
   const res = { ok: true, row: row, status: status, previous: current, added: qty, newValue: newVal, mode: mode, user: user ? user.name : '' };
   const locNote = writeLocation_(sheet, headerMap, row, params);
+  const after = readProduct_(sheet, headerMap, row);
   if (locNote !== null) {
-    const after = readProduct_(sheet, headerMap, row);
     res.loc = { location: after.location, pallet: after.pallet, box: after.box };
     if (locNote) appendLog_({ user: user ? user.name : '', name: after.name, model: after.model, barcode: after.barcode, row: row,
       modeText: '設定位置', note: locNote });
+  }
+  if (params.batch) {
+    res.batch = appendBatch_(params, user, after, {
+      status: status, qty: qty, modeText: params.undo ? '撤銷' : (mode === 'set' ? '覆蓋' : '累加'),
+      prev: current, next: newVal, note: locNote || '' });
   }
   return res;
 }
@@ -409,7 +420,9 @@ function setLocation(params, user) {
   const note = writeLocation_(sheet, headerMap, row, params);
   if (note) appendLog_({ user: user.name, name: before.name, model: before.model, barcode: before.barcode, row: row,
     modeText: '設定位置', note: note });
-  return { ok: true, item: readProduct_(sheet, headerMap, row) };
+  const item = readProduct_(sheet, headerMap, row);
+  if (note && params.batch) appendBatch_(params, user, item, { modeText: '設定位置', note: note });
+  return { ok: true, item: item };
 }
 
 /* 開始新一輪盤點：記下開始時間；reset=true 時先備份整張表，再把狀態數量全部歸零 */
@@ -430,4 +443,51 @@ function startRound(params, user) {
   PropertiesService.getScriptProperties().setProperty('ROUND_START', now.toISOString());
   appendLog_({ user: user.name, modeText: '開始新一輪盤點', note: params.reset ? '已歸零，備份於 ' + backup : '數量未歸零' });
   return { ok: true, roundStart: now.toISOString(), backup: backup };
+}
+
+
+
+// ============ 倉庫清單 / 每人每批分頁（v4） ============
+
+/* 讀「倉庫」分頁 A 欄（第 2 列起）；分頁不存在時自動建立並填入預設清單 */
+function listWarehouses_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(WAREHOUSE_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(WAREHOUSE_SHEET, ss.getSheets().length);
+    sheet.getRange(1, 1).setValue('倉庫名稱');
+    sheet.getRange(2, 1, DEFAULT_WAREHOUSES.length, 1).setNumberFormat('@')
+      .setValues(DEFAULT_WAREHOUSES.map(w => [w]));
+  }
+  const n = sheet.getLastRow() - 1;
+  if (n < 1) return [];
+  return sheet.getRange(2, 1, n, 1).getDisplayValues().map(r => String(r[0]).trim()).filter(Boolean);
+}
+
+/* 分頁名稱不能有 [ ] * ? : / \ ，長度上限 100 */
+function batchSheetName_(name) {
+  let s = String(name || '').replace(/[\[\]*?:\/\\]/g, '-').trim();
+  if (s.indexOf(BATCH_PREFIX) !== 0) s = BATCH_PREFIX + s;
+  return s.slice(0, 100);
+}
+
+/* 每人每批分頁：第一次寫入時自動建立（離線先存、之後補傳也能建） */
+function appendBatch_(params, user, item, o) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const name = batchSheetName_(params.batch);
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name, ss.getSheets().length);
+    sheet.getRange(1, 1, 1, BATCH_HEADERS.length).setValues([BATCH_HEADERS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    sheet.getRange('F:F').setNumberFormat('@');   // 條碼保持文字
+  }
+  sheet.appendRow([
+    new Date(), params.warehouse || '', user ? user.name : '',
+    item.name || params.name || '', item.model || params.model || '', item.barcode || params.barcode || '',
+    o.status || '', o.qty === undefined ? '' : o.qty, o.modeText || '',
+    o.prev === undefined ? '' : o.prev, o.next === undefined ? '' : o.next,
+    item.location || '', item.pallet || '', item.box || '', item.row || '', o.note || ''
+  ]);
+  return name;
 }
