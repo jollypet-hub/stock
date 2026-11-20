@@ -43,4 +43,4 @@
 
 ## 預覽
 每個分支都可以用這個網址預覽：
-`https://raw.githack.com/Roychou0413/STOCK/<分支名稱>/index.html`
+`https://raw.githack.com/jollypet-hub/stock/<分支名稱>/index.html`
