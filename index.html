@@ -55,6 +55,9 @@
     .overlay.show{display:flex;}
     .sheet{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:560px;
       padding:20px 18px calc(20px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(0,0,0,.15);}
+    .sheet{max-height:92vh;max-height:92dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
+    .sheet .actions{position:sticky;bottom:calc(-20px - env(safe-area-inset-bottom));background:var(--surface);
+      margin-bottom:calc(-20px - env(safe-area-inset-bottom));padding-bottom:calc(14px + env(safe-area-inset-bottom));padding-top:12px;z-index:2;}
     .sheet h2{margin:0 0 3px;font-size:20px;font-weight:800;line-height:1.25;}
     .sheet .model{color:var(--muted);font-size:14px;}
     .sheet .barcode{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace;margin-top:2px;}
@@ -143,6 +146,14 @@
     .info-row{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--muted);margin-top:8px;}
     .info-row b{color:var(--text);}
     .loc-btn{background:none;border:none;color:var(--primary);font-size:13px;font-weight:700;padding:0;flex:none;}
+    .loc-chips{display:flex;gap:8px;margin-bottom:8px;}
+    .loc-chip{flex:1;padding:9px 6px;border-radius:10px;border:2px solid var(--border);background:var(--surface);
+      color:var(--text);font-size:15px;font-weight:700;}
+    .loc-chip.on{border-color:var(--primary);background:#eff4ff;color:var(--primary);}
+    .loc-two{display:flex;gap:8px;margin-top:8px;}
+    .loc-two .field{flex:1;min-width:0;}
+    .field.changed{border-color:var(--primary);background:#f5f8ff;}
+    .loc-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--muted);}
     .tabs{display:flex;gap:6px;overflow-x:auto;margin:0 0 8px;padding-bottom:2px;}
     .tabs button{flex:0 0 auto;font-size:13px;padding:7px 12px;border-radius:999px;background:var(--surface);
       color:var(--text);border:1.5px solid var(--border);font-weight:600;}
@@ -206,6 +217,23 @@
       <div class="model" id="mModel"></div>
       <div class="barcode" id="mBarcode"></div>
       <div class="info-row" id="mInfo"></div>
+      <div id="locSec">
+        <div class="lbl">位置</div>
+        <div class="loc-chips" id="locChips">
+          <button type="button" class="loc-chip" onclick="pickFloor('1樓')">1樓</button>
+          <button type="button" class="loc-chip" onclick="pickFloor('2樓')">2樓</button>
+          <button type="button" class="loc-chip" onclick="pickFloor('4樓')">4樓</button>
+        </div>
+        <input id="locInput" class="field" placeholder="儲位（點上方樓層或直接輸入）" autocomplete="off" enterkeyhint="next">
+        <div class="loc-two">
+          <input id="palletInput" class="field" placeholder="板位號碼" autocomplete="off" enterkeyhint="next">
+          <input id="boxInput" class="field" placeholder="箱號" autocomplete="off" enterkeyhint="done">
+        </div>
+        <div class="loc-foot">
+          <span id="locNote">有修改的位置會隨「存入表單」一起寫回</span>
+          <button type="button" class="loc-btn" id="locOnlyBtn" onclick="saveLocationOnly()">只更新位置</button>
+        </div>
+      </div>
       <div class="lbl">狀態</div>
       <div class="status-grid" id="statusGrid"></div>
       <div class="lbl">數量</div>
@@ -392,6 +420,7 @@
       fetchJSON(API_URL, null, 15000).then(r=>{
         backendVersion = (r && r.version) ? r.version : 1;
         renderSetInfo();
+        if(product) locMode();
       }).catch(()=>{});
     }
 
@@ -586,7 +615,7 @@
         +'<div class="'+cls+'-name">'+esc(it.name||'(未命名)')+'</div>'
         +'<div class="'+cls+'-meta">'+(it.model?('型號 '+esc(it.model)):'')
         +(it.barcode?('　·　條碼 '+esc(it.barcode)):'　·　無條碼')
-        +(it.location?('　·　儲位 '+esc(it.location)):'')+'　·　第 '+it.row+' 列</div>'
+        +(locText(it)?('　·　📍'+esc(locText(it))):'')+'　·　第 '+it.row+' 列</div>'
         +'</button>';
     }
     function pickResult(idx){
@@ -755,10 +784,11 @@
         if(listTab==='done' && !isCounted(it)) return false;
         if((listTab==='plus'||listTab==='minus') && flagOf(it)!==listTab) return false;
         if(!q) return true;
-        return [it.name,it.model,it.barcode,it.location].some(v=>String(v||'').toLowerCase().includes(q));
+        return [it.name,it.model,it.barcode,it.location,it.pallet,it.box].some(v=>String(v||'').toLowerCase().includes(q));
       });
       const cmp=(a,b)=>String(a||'').localeCompare(String(b||''),'zh-Hant',{numeric:true});
-      if(listSort==='location') items=items.slice().sort((a,b)=>(!a.location)-(!b.location) || cmp(a.location,b.location) || a.row-b.row);
+      if(listSort==='location') items=items.slice().sort((a,b)=>(!locText(a))-(!locText(b)) || cmp(a.location,b.location)
+        || cmp(a.pallet,b.pallet) || cmp(a.box,b.box) || a.row-b.row);
       else if(listSort==='name') items=items.slice().sort((a,b)=>cmp(a.name,b.name));
       renderList(items);
     }
@@ -775,7 +805,7 @@
         const book=(listInfo.columns.book && it.book!=null)?'<span style="color:var(--muted)">帳面 '+it.book+'</span>':'';
         return '<button class="li-item" onclick="pickList('+idx+')">'
           +'<div class="li-name">'+esc(it.name||'(未命名)')+flag+'</div>'
-          +'<div class="li-meta">'+(it.location?('📍'+esc(it.location)+'　'):'')+(it.model?esc(it.model):'')+(it.barcode?('　·　'+esc(it.barcode)):'')+'</div>'
+          +'<div class="li-meta">'+(locText(it)?('📍'+esc(locText(it))+'　'):'')+(it.model?esc(it.model):'')+(it.barcode?('　·　'+esc(it.barcode)):'')+'</div>'
           +'<div class="li-qty">'+badges+book+'</div></button>';
       }).join('');
     }
@@ -801,7 +831,7 @@
       if(!currentListView.length){ toast('目前清單沒有資料','err'); return; }
       if(!(await ensureXLSX())) return;
       const rows=currentListView.map(it=>{
-        const o={ '列':it.row, '品名':it.name, '型號':it.model, '國際條碼':it.barcode, '儲位':it.location||'' };
+        const o={ '列':it.row, '品名':it.name, '型號':it.model, '國際條碼':it.barcode, '儲位':it.location||'', '板位號碼':it.pallet||'', '箱號':it.box||'' };
         STATUS_META.forEach(sm=>{ o[sm.name]=(it.quantities||{})[sm.name]??0; });
         o['盤點合計']=totalQty(it);
         if(listInfo.columns.book){ o['帳面數量']=it.book??''; o['差異']=diffOf(it)??''; }
@@ -825,29 +855,84 @@
         const el=document.getElementById('cur-'+s.name);
         if(el) el.textContent='目前 '+((res.quantities||{})[s.name]??0);
       });
+      fillLocation(res);
       qtyInput.value=1; selectStatus('新品');
       overlay.classList.add('show');
       setHint('填寫數量與狀態');
     }
     function renderProductInfo(){
       const r=product, parts=[];
-      parts.push('📍 儲位 <b>'+(r.location?esc(r.location):'未設定')+'</b>'+(backendVersion!==1?' <button class="loc-btn" onclick="editLocation()">編輯</button>':''));
       if(r.book!=null && r.book!==undefined) parts.push('帳面 <b>'+r.book+'</b>');
       if(r.lastCounted) parts.push('上次盤點 '+fmtTime(r.lastCounted)+(r.counter?'（'+esc(r.counter)+'）':''));
       document.getElementById('mInfo').innerHTML=parts.join('');
     }
-    async function editLocation(){
+    // ---- 位置欄位：儲位 / 板位號碼 / 箱號 ----
+    const LOC_FIELDS=[ {key:'location', id:'locInput', label:'儲位'}, {key:'pallet', id:'palletInput', label:'板位'}, {key:'box', id:'boxInput', label:'箱號'} ];
+    function locText(it){
+      if(!it) return '';
+      return [it.location, it.pallet?('板 '+it.pallet):'', it.box?('箱 '+it.box):''].filter(Boolean).join(' / ');
+    }
+    function fillLocation(res){
+      LOC_FIELDS.forEach(f=>{ document.getElementById(f.id).value=String((res&&res[f.key])||''); });
+      locMode();
+    }
+    function locMode(){
+      // 舊版後端（v1/v2）不會寫板位、箱號 → 只開放儲位
+      const old = backendVersion>0 && backendVersion<3;
+      document.getElementById('palletInput').disabled=old;
+      document.getElementById('boxInput').disabled=old;
+      document.getElementById('locSec').style.display = backendVersion===1 ? 'none' : '';
+      document.getElementById('locNote').textContent = old ? '板位、箱號需要更新後端 Code.gs（v3）' : '有修改的位置會隨「存入表單」一起寫回';
+      paintLocation();
+    }
+    // 只回傳「有變動」的欄位；沒有變動回傳 null
+    function locChanges(){
+      if(!product || backendVersion===1) return null;
+      const out={}; let n=0;
+      LOC_FIELDS.forEach(f=>{
+        const el=document.getElementById(f.id);
+        if(el.disabled) return;
+        const v=el.value.trim();
+        if(v!==String(product[f.key]||'').trim()){ out[f.key]=v; n++; }
+      });
+      return n?out:null;
+    }
+    function paintLocation(){
+      const ch=locChanges()||{};
+      LOC_FIELDS.forEach(f=>document.getElementById(f.id).classList.toggle('changed', f.key in ch));
+      const v=document.getElementById('locInput').value.trim();
+      document.querySelectorAll('#locChips .loc-chip').forEach(b=>b.classList.toggle('on', b.textContent===v));
+    }
+    function pickFloor(v){ document.getElementById('locInput').value=v; paintLocation(); }
+    LOC_FIELDS.forEach((f,i)=>{
+      const el=document.getElementById(f.id);
+      el.addEventListener('input', paintLocation);
+      el.addEventListener('keydown', e=>{
+        if(e.key!=='Enter') return;
+        e.preventDefault();
+        const next=LOC_FIELDS[i+1] && document.getElementById(LOC_FIELDS[i+1].id);
+        if(next && !next.disabled) next.focus(); else el.blur();
+      });
+    });
+    // 只更新位置（不動數量）
+    async function saveLocationOnly(){
       if(!product || !needV2()) return;
-      const p=product;
-      const v=prompt('「'+(p.name||'')+'」的儲位', p.location||'');
-      if(v===null) return;
+      const ch=locChanges();
+      if(!ch){ toast('位置沒有變動','err'); return; }
+      const p=product, btn=document.getElementById('locOnlyBtn');
+      btn.disabled=true; btn.textContent='更新中…';
       try{
-        const r=await apiPost({ action:'setLocation', row:p.row, barcode:p.barcode||'', location:v.trim() });
+        const r=await apiPost(Object.assign({ action:'setLocation', row:p.row, barcode:p.barcode||'' }, ch));
         if(r && r.ok){
-          if(product===p){ product.location=r.item.location; renderProductInfo(); }
-          patchList(r.item); toast('✓ 儲位已更新','ok');
-        }else toast((r&&r.error)||'更新失敗','err');
-      }catch(e){ toast('更新失敗：'+e.message,'err'); }
+          const it=r.item||{};
+          const loc={ location:it.location||'', pallet:it.pallet||'', box:it.box||'' };
+          if(it.pallet===undefined){ delete loc.pallet; delete loc.box; }   // 舊版後端沒有這兩欄
+          Object.assign(p, loc); patchList(Object.assign({row:p.row}, loc));
+          if(product===p) fillLocation(p);
+          feedback('ok'); toast('✓ 位置已更新：'+(locText(p)||'(空)'),'ok');
+        }else{ feedback('err'); toast((r&&r.error)||'更新失敗','err'); }
+      }catch(e){ feedback('err'); toast('更新失敗：'+e.message,'err'); }
+      finally{ btn.disabled=false; btn.textContent='只更新位置'; }
     }
     function resume(){if(qr&&scanning){try{qr.resume();}catch(e){}}}
     function closeModal(){overlay.classList.remove('show');product=null;resume();setHint('將條碼對準取景框');}
@@ -866,7 +951,20 @@
       initAudio();
       const qty=parseInt(qtyInput.value,10);
       if(isNaN(qty)||qty<0){toast('請輸入有效數量','err');return;}
-      submitJob(makeJob(product, status, qty, mode), { modal:true });
+      const job=makeJob(product, status, qty, mode);
+      const loc=locChanges(); if(loc) job.loc=loc;
+      submitJob(job, { modal:true });
+    }
+    // 數量寫入成功後：把位置更新到快取；後端沒回 loc 代表是舊版後端，位置沒寫進去
+    function afterLoc(job, r){
+      if(!job.loc) return;
+      const row=r.row ?? job.item.row;
+      if(r.loc){
+        patchList(Object.assign({row}, r.loc));
+        if(product && product.row===row) Object.assign(product, r.loc);
+      }else{
+        setTimeout(()=>toast('⚠ 數量已存，但位置沒寫入：後端 Code.gs 需更新到 v3','err'), 2600);
+      }
     }
     // 送出一筆寫入：成功 → 紀錄；沒網路 → 暫存；已有暫存 → 排隊
     function submitJob(job, opt){
@@ -878,12 +976,12 @@
       }
       if(opt.modal){ saveBtn.disabled=true; saveBtn.textContent='儲存中…'; }
       const unbusy=()=>{ if(opt.modal){ saveBtn.disabled=false; saveBtn.textContent='存入表單'; } };
-      apiSave(job.item, job.status, job.qty, job.mode).then(r=>{
+      apiSave(job.item, job.status, job.qty, job.mode, job.loc).then(r=>{
         unbusy();
         if(r && r.ok){
           feedback('ok');
-          toast('✓ '+job.name+'　'+r.status+' '+(r.mode==='set'?'設為 ':'+')+r.added+' → '+r.newValue,'ok');
-          addHist(job,r); patchListQty(r.row ?? job.item.row, r.status, r.newValue);
+          toast('✓ '+job.name+'　'+r.status+' '+(r.mode==='set'?'設為 ':'+')+r.added+' → '+r.newValue+(job.loc&&r.loc?'　📍已更新':''),'ok');
+          addHist(job,r); patchListQty(r.row ?? job.item.row, r.status, r.newValue); afterLoc(job,r);
           done();
         }else{ feedback('err'); toast((r&&(r.message||r.error))||'儲存失敗','err'); }
       }).catch(err=>{
@@ -950,7 +1048,7 @@
           const job=queue[0];
           const h=hist.find(x=>x.id===job.id);
           let r;
-          try{ r=await apiSave(job.item, job.status, job.qty, job.mode); }
+          try{ r=await apiSave(job.item, job.status, job.qty, job.mode, job.loc); }
           catch(e){
             if(isNetErr(e)) break;                         // 還是沒網路：保留，下次再試
             queue.shift();                                 // 逾時：不確定是否已寫入，不再重送
@@ -964,7 +1062,7 @@
             done++;
             if(h){ Object.assign(h,{ pending:false, status:r.status, added:r.added, newVal:r.newValue, mode:r.mode,
               prev:prevFrom(job,r), row:r.row ?? h.row }); }
-            patchListQty(r.row ?? job.item.row, r.status, r.newValue);
+            patchListQty(r.row ?? job.item.row, r.status, r.newValue); afterLoc(job,r);
           }else{
             if(h){ h.pending=false; h.failed=(r&&(r.message||r.error))||'儲存失敗'; }
             toast('「'+job.name+'」上傳失敗：'+((r&&(r.message||r.error))||''),'err'); feedback('err');

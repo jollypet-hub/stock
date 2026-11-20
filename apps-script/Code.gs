@@ -1,6 +1,7 @@
 /**
- * 倉庫盤點掃描 — 後端 API (Google Apps Script)  v2
+ * 倉庫盤點掃描 — 後端 API (Google Apps Script)  v3
  * 含「每人密碼登入 + 修改紀錄」，並新增：新增商品 / 綁定條碼 / 儲位 / 盤點進度與差異 / 開始新一輪
+ * v3：位置欄位（儲位 / 板位號碼 / 箱號）可隨「存入表單」一起寫回，或單獨更新
  *
  * 綁定在你的試算表上：擴充功能 → Apps Script，把整個 Code.gs 內容換成本檔。
  *
@@ -10,7 +11,7 @@
  *
  * ★ 庫存分頁的選用欄位（沒有也能用）：
  *   - 帳面數量：有這欄才會計算盤盈 / 盤虧
- *   - 儲位、最後盤點時間、盤點人員：第一次用到時會自動在最右邊新增
+ *   - 儲位、板位號碼、箱號、最後盤點時間、盤點人員：第一次用到時會自動在最右邊新增
  *
  * ★ 改完務必「部署 → 管理部署作業 → 編輯 → 版本：新版本 → 部署」，改動才會生效。
  */
@@ -26,13 +27,15 @@ const STATUS_COLUMNS = ['新品', '福利品', '瑕疵', '報廢', '樣品', '�
 
 const BOOK_HEADER     = '帳面數量';      // 選用
 const LOCATION_HEADER = '儲位';          // 選用（自動新增）
+const PALLET_HEADER   = '板位號碼';      // 選用（自動新增）
+const BOX_HEADER      = '箱號';          // 選用（自動新增）
 const COUNTED_HEADER  = '最後盤點時間';  // 自動新增
 const COUNTER_HEADER  = '盤點人員';      // 自動新增
 
 const USERS_SHEET = '使用者';  // 使用者清單分頁（姓名/密碼/啟用）
 const LOG_SHEET   = '紀錄';    // 修改紀錄分頁（自動建立）
 const SEARCH_LIMIT = 30;
-const API_VERSION = 2;
+const API_VERSION = 3;
 // ==============================================
 
 
@@ -204,6 +207,8 @@ function rowToProduct_(sheet, headerMap, row, rowValues) {
     name: getVal(NAME_HEADER), model: getVal(MODEL_HEADER),
     quantities: quantities,
     location: String(getVal(LOCATION_HEADER) || '').trim(),
+    pallet: String(getVal(PALLET_HEADER) || '').trim(),
+    box: String(getVal(BOX_HEADER) || '').trim(),
     book: (headerMap[BOOK_HEADER] && book !== '' && book !== null) ? (Number(book) || 0) : null,
     lastCounted: counted instanceof Date ? counted.toISOString() : (counted ? String(counted) : ''),
     counter: String(getVal(COUNTER_HEADER) || '').trim()
@@ -230,7 +235,7 @@ function searchProducts(q) {
   const headerMap = getHeaderMap_(sheet);
   const nameCol = headerMap[NAME_HEADER];
   const modelCol = headerMap[MODEL_HEADER];
-  const locCol = headerMap[LOCATION_HEADER];
+  const locCols = [LOCATION_HEADER, PALLET_HEADER, BOX_HEADER].map(h => headerMap[h]).filter(Boolean);
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow <= HEADER_ROW) return { ok: true, results: [] };
@@ -241,7 +246,7 @@ function searchProducts(q) {
     const rowValues = data[i];
     const name  = nameCol  ? String(rowValues[nameCol - 1])  : '';
     const model = modelCol ? String(rowValues[modelCol - 1]) : '';
-    const loc   = locCol   ? String(rowValues[locCol - 1])   : '';
+    const loc   = locCols.map(c => String(rowValues[c - 1])).join(' ');
     if (name.toLowerCase().indexOf(q) !== -1 || model.toLowerCase().indexOf(q) !== -1 || loc.toLowerCase().indexOf(q) !== -1) {
       results.push(rowToProduct_(sheet, headerMap, HEADER_ROW + 1 + i, rowValues));
     }
@@ -257,7 +262,7 @@ function listAll() {
   const info = {
     ok: true, version: API_VERSION,
     roundStart: PropertiesService.getScriptProperties().getProperty('ROUND_START') || '',
-    columns: { book: !!headerMap[BOOK_HEADER], location: !!headerMap[LOCATION_HEADER] }
+    columns: { book: !!headerMap[BOOK_HEADER], location: !!headerMap[LOCATION_HEADER], pallet: !!headerMap[PALLET_HEADER], box: !!headerMap[BOX_HEADER] }
   };
   if (lastRow <= HEADER_ROW) return Object.assign(info, { results: [] });
 
@@ -286,7 +291,8 @@ function resolveRow_(params) {
   return { sheet, headerMap, row };
 }
 
-/* 寫入數量並記錄操作人。params: { barcode?, row?, name?, model?, status, qty, mode, undo? } */
+/* 寫入數量並記錄操作人。params: { barcode?, row?, name?, model?, status, qty, mode, undo?, location?, pallet?, box? }
+ * location / pallet / box 有帶才寫（前端只送有變動的欄位） */
 function saveCount(params, user) {
   const status = params.status;
   const qty = Number(params.qty);
@@ -316,7 +322,15 @@ function saveCount(params, user) {
     note: params.undo ? '撤銷' : ''
   });
 
-  return { ok: true, row: row, status: status, previous: current, added: qty, newValue: newVal, mode: mode, user: user ? user.name : '' };
+  const res = { ok: true, row: row, status: status, previous: current, added: qty, newValue: newVal, mode: mode, user: user ? user.name : '' };
+  const locNote = writeLocation_(sheet, headerMap, row, params);
+  if (locNote !== null) {
+    const after = readProduct_(sheet, headerMap, row);
+    res.loc = { location: after.location, pallet: after.pallet, box: after.box };
+    if (locNote) appendLog_({ user: user ? user.name : '', name: after.name, model: after.model, barcode: after.barcode, row: row,
+      modeText: '設定位置', note: locNote });
+  }
+  return res;
 }
 
 /* 新增商品。params: { barcode?, name, model?, location? } */
@@ -363,15 +377,38 @@ function bindBarcode(params, user) {
   return { ok: true, item: item };
 }
 
-/* 設定儲位。params: { barcode?, row, location } */
+/* 位置欄位：params 有帶 location / pallet / box 的才寫入（缺欄自動新增）。
+ * 回傳：null = 沒帶任何位置欄位；'' = 有帶但值都沒變；其他 = 變動說明（寫入紀錄用） */
+const LOCATION_FIELDS_ = [
+  { key: 'location', header: LOCATION_HEADER, label: '儲位' },
+  { key: 'pallet',   header: PALLET_HEADER,   label: '板位' },
+  { key: 'box',      header: BOX_HEADER,      label: '箱號' }
+];
+function writeLocation_(sheet, headerMap, row, params) {
+  const fields = LOCATION_FIELDS_.filter(f => params[f.key] !== undefined && params[f.key] !== null);
+  if (!fields.length) return null;
+  const notes = [];
+  fields.forEach(f => {
+    const col = ensureCol_(sheet, headerMap, f.header);
+    const cell = sheet.getRange(row, col);
+    const before = String(cell.getValue() || '').trim();
+    const v = String(params[f.key]).trim();
+    if (before === v) return;
+    if (f.key !== 'location') cell.setNumberFormat('@');   // 文字格式，保留開頭 0（例如板位 007）
+    cell.setValue(v);
+    notes.push(f.label + ' ' + (before || '(空)') + ' → ' + (v || '(空)'));
+  });
+  return notes.join('；');
+}
+
+/* 設定位置（儲位 / 板位號碼 / 箱號，有帶哪個就寫哪個）。params: { barcode?, row, location?, pallet?, box? } */
 function setLocation(params, user) {
   const { sheet, headerMap, row } = resolveRow_(params);
   if (!row) throw new Error('找不到這個商品，請重新查詢');
   const before = readProduct_(sheet, headerMap, row);
-  const loc = String(params.location || '').trim();
-  sheet.getRange(row, ensureCol_(sheet, headerMap, LOCATION_HEADER)).setValue(loc);
-  appendLog_({ user: user.name, name: before.name, model: before.model, barcode: before.barcode, row: row, modeText: '設定儲位',
-    note: (before.location || '(空)') + ' → ' + (loc || '(空)') });
+  const note = writeLocation_(sheet, headerMap, row, params);
+  if (note) appendLog_({ user: user.name, name: before.name, model: before.model, barcode: before.barcode, row: row,
+    modeText: '設定位置', note: note });
   return { ok: true, item: readProduct_(sheet, headerMap, row) };
 }
 
