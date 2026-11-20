@@ -474,6 +474,7 @@
     async function startScan(){
       if(scanning) return;
       initAudio();
+      warmCache(false);
       if(typeof Html5Qrcode==='undefined'){
         setHint('載入相機元件中…',true);
         try{ await loadScript(QR_LIBS); }catch(e){ setHint('相機元件載入失敗，請檢查網路後重試'); return; }
@@ -517,7 +518,7 @@
       const cached=localFindByBarcode(text);
       if(cached){
         if(continuous){ quickAdd(cached); return; }
-        openProduct(cached); return;
+        openProduct(cached); refreshOpenProduct(cached); return;
       }
       setHint('查詢商品中…',true);
       apiLookup(text).then(res=>{
@@ -735,14 +736,30 @@
       }else{
         body.innerHTML='<div class="sr-hint"><span class="spin"></span>載入庫存中…</div>';
       }
-      apiGet('list', null, 30000).then(r=>{
-        if(!r||r.error){ listLoadFail((r&&r.error)||''); return; }
+      refreshListCache().then(ok=>{ if(ok) document.getElementById('listStale').textContent=''; })
+        .catch(err=>listLoadFail(err.message));
+    }
+    // 背景更新本機庫存快取：掃到條碼時直接用快取開視窗，不必等伺服器（iPhone 掃描後的等待主要在這）
+    let listLoading=null;
+    function refreshListCache(){
+      if(listLoading) return listLoading;
+      if(!settings.code) return Promise.resolve(false);
+      listLoading=apiGet('list', null, 30000).then(r=>{
+        if(!r||r.error){ if(isListOpen()) listLoadFail((r&&r.error)||''); return false; }
         listData=r.results||[];
         listInfo={ roundStart:r.roundStart||'', columns:r.columns||{}, version:r.version||1, t:Date.now() };
         if(r.version) backendVersion=Math.max(backendVersion, r.version);
-        saveListCache(); applyList();
-        document.getElementById('listStale').textContent='';
-      }).catch(err=>listLoadFail(err.message));
+        saveListCache();
+        if(isListOpen()) applyList();
+        return true;
+      }).finally(()=>{ listLoading=null; });
+      return listLoading;
+    }
+    const isListOpen = () => document.getElementById('listOverlay').classList.contains('show');
+    const CACHE_MAX_AGE = 5*60*1000;   // 超過 5 分鐘就在背景更新
+    function warmCache(force){
+      if(!settings.code || document.hidden) return;
+      if(force || !listData.length || Date.now()-(listInfo.t||0) > CACHE_MAX_AGE) refreshListCache().catch(()=>{});
     }
     function listLoadFail(msg){
       if(listData.length){ document.getElementById('listStale').textContent='⚠ 更新失敗（'+msg+'），顯示的是 '+fmtTime(listInfo.t)+' 的資料'; }
@@ -859,6 +876,22 @@
       qtyInput.value=1; selectStatus('新品');
       overlay.classList.add('show');
       setHint('填寫數量與狀態');
+    }
+    // 用快取開視窗後，背景向伺服器拿最新數量／位置（別人可能剛改過）；使用者已改的位置欄不會被蓋掉
+    function refreshOpenProduct(it){
+      if(!it || !it.barcode) return;
+      const p=product;
+      apiLookup(it.barcode).then(res=>{
+        if(!res || !res.found) return;
+        patchList(res);
+        if(product!==p || !p || p.row!==res.row) return;
+        const edited=locChanges();
+        Object.assign(p, { quantities:res.quantities, book:res.book, lastCounted:res.lastCounted, counter:res.counter,
+          location:res.location, pallet:res.pallet, box:res.box });
+        renderProductInfo();
+        STATUS_META.forEach(s=>{ const el=document.getElementById('cur-'+s.name); if(el) el.textContent='目前 '+((p.quantities||{})[s.name]??0); });
+        if(!edited) fillLocation(p); else paintLocation();
+      }).catch(()=>{});
     }
     function renderProductInfo(){
       const r=product, parts=[];
@@ -1201,6 +1234,7 @@
           settings.code=code; settings.operator=r.name||''; saveSettingsLS(); renderWho(); closeSettings();
           feedback('ok'); toast('✓ 歡迎，'+settings.operator,'ok');
           if(queue.length) flushQueue();
+          warmCache(true);
         }else{ feedback('err'); toast((r&&r.error)||'登入失敗','err'); }
       }catch(e){ toast('登入失敗：'+e.message,'err'); }
       finally{ btn.disabled=false; btn.textContent='登入'; }
@@ -1231,6 +1265,9 @@
     renderWho();
     checkBackend();
     if(!settings.code) setTimeout(openSettings, 300);
+    setTimeout(()=>warmCache(false), 800);                       // 開 App 就預先載入庫存快取
+    setInterval(()=>warmCache(false), 60*1000);                  // 每分鐘檢查，超過 5 分鐘就更新
+    document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) warmCache(false); });
     // PWA：離線也能開啟頁面（只在 https 下啟用）
     if('serviceWorker' in navigator && (location.protocol==='https:' || location.hostname==='localhost')){
       window.addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
