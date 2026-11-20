@@ -89,8 +89,12 @@
     #overlay .st-btn{padding:8px 2px;font-size:15px;gap:1px;border-radius:10px;}
     #overlay .st-btn small{font-size:11px;}
     #overlay .qty-row{gap:6px;}
-    #overlay .qty-row .step{width:44px;height:46px;font-size:22px;border-radius:12px;}
-    #overlay .qty-row input{font-size:24px;padding:6px;border-radius:12px;min-width:0;}
+    #overlay .qty-row .step{flex:0 0 48px;width:48px;height:50px;font-size:24px;border-radius:12px;}
+    #overlay .qty-row input{flex:1 1 0;font-size:26px;padding:6px;height:50px;border-radius:12px;min-width:0;}
+    #overlay .qty-row .undo-last{flex:0 0 54px;width:54px;font-size:18px;line-height:1;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:2px;color:var(--danger);border-color:#fecaca;}
+    #overlay .qty-row .undo-last small{font-size:10px;font-weight:700;}
+    #overlay .mode-seg button{height:46px;padding:0 9px;}
     .mode-seg{flex:0 0 auto;display:flex;border:2px solid var(--border);border-radius:12px;overflow:hidden;}
     .mode-seg button{flex:none;padding:0 10px;height:42px;font-size:13px;font-weight:700;border-radius:0;
       background:var(--surface);color:var(--muted);}
@@ -266,11 +270,6 @@
       <div id="locSec">
         <div class="lbl"><span>位置 <small id="locNote" style="font-weight:400"></small></span>
           <button type="button" class="loc-btn" id="locOnlyBtn" onclick="saveLocationOnly()">只更新位置</button></div>
-        <div class="loc-chips" id="locChips">
-          <button type="button" class="loc-chip" onclick="pickFloor('1樓')">1樓</button>
-          <button type="button" class="loc-chip" onclick="pickFloor('2樓')">2樓</button>
-          <button type="button" class="loc-chip" onclick="pickFloor('4樓')">4樓</button>
-        </div>
         <div class="loc-three">
           <input id="locInput" class="field" placeholder="儲位" autocomplete="off" enterkeyhint="next">
           <input id="palletInput" class="field" placeholder="板位" autocomplete="off" enterkeyhint="next">
@@ -283,6 +282,7 @@
       <div class="qty-row">
         <button class="step" onclick="adjustQty(-1)">−</button>
         <input id="qtyInput" type="number" inputmode="numeric" value="1" min="0">
+        <button class="step undo-last" id="undoLastBtn" onclick="undoLast()" title="撤銷上一筆">↩<small>上一筆</small></button>
         <button class="step" onclick="adjustQty(1)">＋</button>
         <div class="mode-seg">
           <button class="on" id="modeAdd" onclick="setMode('add')">累加</button>
@@ -989,7 +989,7 @@
       const ch=locChanges()||{};
       LOC_FIELDS.forEach(f=>document.getElementById(f.id).classList.toggle('changed', f.key in ch));
       const v=document.getElementById('locInput').value.trim();
-      document.querySelectorAll('#locChips .loc-chip').forEach(b=>b.classList.toggle('on', b.textContent===v));
+
     }
     function pickFloor(v){ document.getElementById('locInput').value=v; paintLocation(); }
     LOC_FIELDS.forEach((f,i)=>{
@@ -1192,6 +1192,18 @@
         }else{ feedback('err'); toast('撤銷失敗：'+((r&&(r.message||r.error))||''),'err'); }
       }catch(e){ feedback('err'); toast('撤銷失敗：'+e.message+(isNetErr(e)?'（請連線後再試）':'（請重新查詢確認數量）'),'err'); }
       finally{ h.busy=false; saveHistLS(); renderHist(); }
+    }
+
+    // 商品視窗裡的「↩ 上一筆」：撤銷最近一次存入（不論是哪個商品）
+    async function undoLast(){
+      const h=hist.find(x=>!x.undone && !x.failed && !x.busy);
+      if(!h){ toast('沒有可撤銷的紀錄','err'); return; }
+      await undoHist(h.id);
+      if(h.undone && product && product.row===h.row){
+        const v = h.pending ? null : h.prev;
+        if(v!=null){ product.quantities=Object.assign({}, product.quantities, {[h.status]:v});
+          const el=document.getElementById('cur-'+h.status); if(el) el.textContent='目前 '+v; }
+      }
     }
 
     function histNote(h){
