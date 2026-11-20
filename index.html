@@ -37,6 +37,10 @@
     .batch-bar .bt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .batch-bar b{color:var(--primary);}
     .batch-bar button{flex:0 0 auto;font-size:13px;padding:7px 12px;border-radius:10px;}
+    #cfOverlay{z-index:120;align-items:center;padding:20px;}
+    #cfOverlay .sheet{border-radius:18px;max-width:420px;}
+    #cfMsg{font-size:16px;line-height:1.6;white-space:pre-line;margin:4px 0 4px;}
+    #cfOverlay .actions .save.danger{background:var(--danger);}
     .wh-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px;}
     .wh-btn{padding:16px 6px;border-radius:12px;border:2px solid var(--border);background:var(--surface);color:var(--text);
       font-size:18px;font-weight:800;}
@@ -374,6 +378,17 @@
       <div class="actions">
         <button class="cancel" onclick="closeSettings()">關閉</button>
         <button class="save" id="loginBtn" onclick="login()">登入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App 自己的確認視窗（不用 Safari 的 confirm，避免出現「禁止顯示對話方塊」） -->
+  <div class="overlay" id="cfOverlay">
+    <div class="sheet">
+      <div id="cfMsg"></div>
+      <div class="actions">
+        <button class="cancel" id="cfNo">取消</button>
+        <button class="save" id="cfYes">確定</button>
       </div>
     </div>
   </div>
@@ -740,7 +755,7 @@
       const msg = it.barcode
         ? '「'+it.name+'」已有條碼 '+it.barcode+'。\n確定改成 '+nfCode+'?（原條碼會被取代）'
         : '把條碼 '+nfCode+' 綁定到「'+it.name+'」?';
-      if(!confirm(msg)) return;
+      if(!(await askConfirm(msg))) return;
       try{
         const r=await apiPost({ action:'bindBarcode', row:it.row, barcode:nfCode, force:!!it.barcode });
         if(r && r.ok){
@@ -1174,15 +1189,15 @@
       if(!h || h.undone || h.busy) return;
       initAudio();
       if(h.pending){
-        if(!confirm('取消這筆尚未上傳的紀錄?')) return;
+        if(!(await askConfirm('取消這筆尚未上傳的紀錄？', { ok:'取消這筆', cancel:'保留', danger:true }))) return;
         if(flushing && queue.length && queue[0].id===id){ toast('這筆正在上傳，請稍後再撤銷','err'); return; }
         queue=queue.filter(j=>j.id!==id); saveQueueLS();
         h.pending=false; h.undone=true; saveHistLS(); renderHist(); renderQueue();
         toast('已取消這筆待上傳紀錄','ok'); return;
       }
       if(h.prev==null){ toast('此筆缺少寫入前數量，無法撤銷','err'); return; }
-      if(!confirm('撤銷「'+h.name+'」'+h.status+'：\n數量將由 '+h.newVal+' 還原為 '+h.prev
-        +'\n\n（若之後有人再修改過此品項，會被這個數字覆蓋）')) return;
+      if(!(await askConfirm('撤銷「'+h.name+'」'+h.status+'：\n數量將由 '+h.newVal+' 還原為 '+h.prev
+        +'\n\n（若之後有人再修改過此品項，會被這個數字覆蓋）', { ok:'撤銷', danger:true }))) return;
       h.busy=true; renderHist();
       try{
         const r=await apiSave({barcode:h.barcode, row:h.row, name:h.name, model:h.model}, h.status, h.prev, 'set', { undo:true, batch:h.batch||'', warehouse:h.warehouse||'' });
@@ -1205,6 +1220,26 @@
           const el=document.getElementById('cur-'+h.status); if(el) el.textContent='目前 '+v; }
       }
     }
+
+    // ---- App 自己的確認視窗：await askConfirm('訊息', {ok:'確定', cancel:'取消', danger:true}) → true / false ----
+    let cfResolve=null;
+    function askConfirm(msg, opt){
+      opt=opt||{};
+      if(cfResolve) cfResolve(false);
+      document.getElementById('cfMsg').textContent=msg;
+      const yes=document.getElementById('cfYes'), no=document.getElementById('cfNo');
+      yes.textContent=opt.ok||'確定'; no.textContent=opt.cancel||'取消';
+      yes.classList.toggle('danger', !!opt.danger);
+      no.style.display = opt.alert ? 'none' : '';
+      document.getElementById('cfOverlay').classList.add('show');
+      return new Promise(res=>{ cfResolve=res; });
+    }
+    function cfDone(v){
+      document.getElementById('cfOverlay').classList.remove('show');
+      const r=cfResolve; cfResolve=null; if(r) r(v);
+    }
+    document.getElementById('cfYes').onclick=()=>cfDone(true);
+    document.getElementById('cfNo').onclick=()=>cfDone(false);
 
     function histNote(h){
       if(h.undone) return '已撤銷';
@@ -1232,10 +1267,10 @@
           +'</div></div>';
       }).join('');
     }
-    function clearHist(){
+    async function clearHist(){
       if(!hist.length) return;
-      if(queue.length){ alert('還有 '+queue.length+' 筆待上傳，請等上傳完成後再清空。'); return; }
-      if(!confirm('確定清空本次盤點紀錄?（不影響已存入表單的數字，清空後也無法再撤銷）')) return;
+      if(queue.length){ toast('還有 '+queue.length+' 筆待上傳，請等上傳完成後再清空','err'); return; }
+      if(!(await askConfirm('確定清空本次盤點紀錄？\n（不影響已存入表單的數字，清空後也無法再撤銷）', { ok:'清空', danger:true }))) return;
       hist=[]; saveHistLS(); renderHist();
     }
 
@@ -1310,16 +1345,16 @@
       }catch(e){ toast('登入失敗：'+e.message,'err'); }
       finally{ btn.disabled=false; btn.textContent='登入'; }
     }
-    function logout(){
-      if(queue.length && !confirm('還有 '+queue.length+' 筆待上傳，登出後要重新登入才會上傳。確定登出?')) return;
+    async function logout(){
+      if(queue.length && !(await askConfirm('還有 '+queue.length+' 筆待上傳，登出後要重新登入才會上傳。確定登出？', { ok:'登出', danger:true }))) return;
       settings.code=''; settings.operator=''; saveSettingsLS(); renderWho(); renderSetInfo();
       toast('已登出');
     }
     async function startRound(){
       if(!needV2()) return;
-      if(!confirm('開始新一輪盤點?\n之後「未盤」會以現在這個時間點重新計算。')) return;
-      const reset = confirm('要同時把所有商品的狀態數量「歸零」嗎?\n\n按「確定」：先自動備份整張工作表，再全部歸零（適合每次重新點數）\n按「取消」：數量保留不動');
-      if(reset && !confirm('再確認一次：所有狀態數量將歸零（會先備份）。確定?')) return;
+      if(!(await askConfirm('開始新一輪盤點？\n之後「未盤」會以現在這個時間點重新計算。', { ok:'開始新一輪' }))) return;
+      const reset = await askConfirm('要同時把所有商品的狀態數量「歸零」嗎？\n\n歸零：先自動備份整張工作表，再全部歸零（適合每次重新點數）\n保留：數量不動', { ok:'歸零（先備份）', cancel:'保留數量', danger:true });
+      if(reset && !(await askConfirm('再確認一次：所有狀態數量將歸零（會先備份）。確定？', { ok:'確定歸零', danger:true }))) return;
       try{
         const r=await apiPost({ action:'startRound', reset });
         if(r && r.ok){
@@ -1371,9 +1406,9 @@
       document.getElementById('whOverlay').classList.add('show');
     }
     function closeWarehouse(){ document.getElementById('whOverlay').classList.remove('show'); afterWarehouse=null; resume(); }
-    function pickWarehouse(i){
+    async function pickWarehouse(i){
       const w=warehouses[i]; if(!w) return;
-      if(batch.name && !confirm('開始新的一批「'+w+'」？\n之後的紀錄會寫到新的分頁。')) return;
+      if(batch.name && !(await askConfirm('開始新的一批「'+w+'」？\n之後的紀錄會寫到新的分頁。', { ok:'開始新一批' }))) return;
       const d=new Date();
       const stamp=pad2(d.getMonth()+1)+pad2(d.getDate())+'_'+pad2(d.getHours())+pad2(d.getMinutes());
       batch={ warehouse:w, operator:settings.operator, t:d.getTime(),
